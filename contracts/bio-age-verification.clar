@@ -1,93 +1,85 @@
-;; Regenerative Medicine Access Equity Contract
-;; Ensures life extension treatments reach all socioeconomic groups
+;; Biological Age Reversal Verification Contract
+;; Monitors and validates successful age reversal interventions
 
 ;; Constants
 (define-constant CONTRACT-OWNER tx-sender)
-(define-constant ERR-NOT-AUTHORIZED (err u500))
-(define-constant ERR-PATIENT-NOT-FOUND (err u501))
-(define-constant ERR-INSUFFICIENT-FUNDS (err u502))
-(define-constant ERR-INVALID-INPUT (err u503))
-(define-constant ERR-SUBSIDY-NOT-FOUND (err u504))
-(define-constant ERR-ALREADY-APPLIED (err u505))
-(define-constant ERR-ELIGIBILITY-FAILED (err u506))
+(define-constant ERR-NOT-AUTHORIZED (err u400))
+(define-constant ERR-PATIENT-NOT-FOUND (err u401))
+(define-constant ERR-ASSESSMENT-NOT-FOUND (err u402))
+(define-constant ERR-INVALID-INPUT (err u403))
+(define-constant ERR-INSUFFICIENT-DATA (err u404))
+(define-constant ERR-VERIFICATION-FAILED (err u405))
 
 ;; Data Variables
 (define-data-var next-patient-id uint u1)
-(define-data-var next-subsidy-id uint u1)
-(define-data-var total-fund-balance uint u0)
-(define-data-var next-application-id uint u1)
+(define-data-var next-assessment-id uint u1)
+(define-data-var next-verification-id uint u1)
 
 ;; Data Maps
 (define-map patients
   { patient-id: uint }
   {
     wallet: principal,
-    income-level: uint,
-    geographic-region: (string-ascii 50),
-    age: uint,
-    medical-need-score: uint,
-    subsidies-received: uint,
-    total-treatments: uint,
+    chronological-age: uint,
+    baseline-biological-age: uint,
+    current-biological-age: uint,
+    assessment-count: uint,
+    last-assessment-block: uint,
+    verified-reversals: uint,
     active: bool
   }
 )
 
-(define-map subsidy-programs
-  { subsidy-id: uint }
-  {
-    program-name: (string-ascii 100),
-    funding-pool: uint,
-    max-coverage-percentage: uint,
-    income-threshold: uint,
-    geographic-restrictions: (list 10 (string-ascii 50)),
-    treatment-types: (list 5 (string-ascii 50)),
-    active: bool,
-    total-beneficiaries: uint
-  }
-)
-
-(define-map subsidy-applications
-  { application-id: uint }
+(define-map biological-assessments
+  { assessment-id: uint }
   {
     patient-id: uint,
-    subsidy-id: uint,
-    treatment-type: (string-ascii 50),
-    treatment-cost: uint,
-    requested-amount: uint,
-    application-block: uint,
-    status: (string-ascii 20),
-    approved-amount: uint,
-    reviewer: (optional principal)
+    assessor: principal,
+    assessment-block: uint,
+    telomere-length: uint,
+    dna-methylation-age: uint,
+    protein-markers: (list 10 uint),
+    metabolic-markers: (list 5 uint),
+    cognitive-score: uint,
+    physical-fitness-score: uint,
+    calculated-bio-age: uint,
+    confidence-level: uint
   }
 )
 
-(define-map funding-sources
-  { source-name: (string-ascii 50) }
+(define-map age-verifications
+  { verification-id: uint }
   {
-    contributor: principal,
-    total-contributed: uint,
-    allocation-preferences: (list 5 (string-ascii 50)),
-    active: bool
+    patient-id: uint,
+    verifier: principal,
+    verification-block: uint,
+    previous-bio-age: uint,
+    current-bio-age: uint,
+    reversal-amount: uint,
+    verification-method: (string-ascii 50),
+    supporting-data: (string-ascii 200),
+    verified: bool,
+    verification-score: uint
   }
 )
 
-(define-map treatment-costs
-  { treatment-type: (string-ascii 50) }
-  {
-    base-cost: uint,
-    complexity-multiplier: uint,
-    regional-adjustments: (list 10 { region: (string-ascii 50), multiplier: uint }),
-    insurance-coverage: uint
-  }
-)
-
-(define-map authorized-reviewers
-  { reviewer: principal }
+(define-map authorized-assessors
+  { assessor: principal }
   {
     active: bool,
     specialization: (string-ascii 50),
-    approved-applications: uint,
-    total-reviews: uint
+    accuracy-score: uint,
+    total-assessments: uint,
+    certification-level: uint
+  }
+)
+
+(define-map biomarker-weights
+  { biomarker-type: (string-ascii 30) }
+  {
+    weight: uint,
+    reliability-score: uint,
+    age-correlation: uint
   }
 )
 
@@ -96,30 +88,30 @@
   (is-eq tx-sender CONTRACT-OWNER)
 )
 
-(define-private (is-authorized-reviewer (reviewer principal))
-  (default-to false (get active (map-get? authorized-reviewers { reviewer: reviewer })))
+(define-private (is-authorized-assessor (assessor principal))
+  (default-to false (get active (map-get? authorized-assessors { assessor: assessor })))
 )
 
 ;; Patient Management Functions
-(define-public (register-patient (income-level uint) (geographic-region (string-ascii 50)) (age uint) (medical-need-score uint))
+(define-public (register-patient (chronological-age uint) (baseline-biological-age uint))
   (let
     (
       (patient-id (var-get next-patient-id))
     )
-    (asserts! (> age u0) ERR-INVALID-INPUT)
-    (asserts! (<= medical-need-score u100) ERR-INVALID-INPUT)
-    (asserts! (> (len geographic-region) u0) ERR-INVALID-INPUT)
+    (asserts! (> chronological-age u0) ERR-INVALID-INPUT)
+    (asserts! (> baseline-biological-age u0) ERR-INVALID-INPUT)
+    (asserts! (<= baseline-biological-age u150) ERR-INVALID-INPUT)
 
     (map-set patients
       { patient-id: patient-id }
       {
         wallet: tx-sender,
-        income-level: income-level,
-        geographic-region: geographic-region,
-        age: age,
-        medical-need-score: medical-need-score,
-        subsidies-received: u0,
-        total-treatments: u0,
+        chronological-age: chronological-age,
+        baseline-biological-age: baseline-biological-age,
+        current-biological-age: baseline-biological-age,
+        assessment-count: u0,
+        last-assessment-block: block-height,
+        verified-reversals: u0,
         active: true
       }
     )
@@ -129,212 +121,228 @@
   )
 )
 
-;; Subsidy Program Management
-(define-public (create-subsidy-program
-  (program-name (string-ascii 100))
-  (funding-pool uint)
-  (max-coverage-percentage uint)
-  (income-threshold uint)
-  (geographic-restrictions (list 10 (string-ascii 50)))
-  (treatment-types (list 5 (string-ascii 50))))
+;; Assessment Functions
+(define-public (create-biological-assessment
+  (patient-id uint)
+  (telomere-length uint)
+  (dna-methylation-age uint)
+  (protein-markers (list 10 uint))
+  (metabolic-markers (list 5 uint))
+  (cognitive-score uint)
+  (physical-fitness-score uint))
   (let
     (
-      (subsidy-id (var-get next-subsidy-id))
-    )
-    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
-    (asserts! (> funding-pool u0) ERR-INVALID-INPUT)
-    (asserts! (<= max-coverage-percentage u100) ERR-INVALID-INPUT)
-    (asserts! (> income-threshold u0) ERR-INVALID-INPUT)
-
-    (map-set subsidy-programs
-      { subsidy-id: subsidy-id }
-      {
-        program-name: program-name,
-        funding-pool: funding-pool,
-        max-coverage-percentage: max-coverage-percentage,
-        income-threshold: income-threshold,
-        geographic-restrictions: geographic-restrictions,
-        treatment-types: treatment-types,
-        active: true,
-        total-beneficiaries: u0
-      }
-    )
-
-    (var-set next-subsidy-id (+ subsidy-id u1))
-    (ok subsidy-id)
-  )
-)
-
-;; Application Management Functions
-(define-public (apply-for-subsidy (patient-id uint) (subsidy-id uint) (treatment-type (string-ascii 50)) (treatment-cost uint))
-  (let
-    (
-      (application-id (var-get next-application-id))
+      (assessment-id (var-get next-assessment-id))
       (patient (unwrap! (map-get? patients { patient-id: patient-id }) ERR-PATIENT-NOT-FOUND))
-      (subsidy (unwrap! (map-get? subsidy-programs { subsidy-id: subsidy-id }) ERR-SUBSIDY-NOT-FOUND))
-      (eligibility-check (check-eligibility patient subsidy treatment-type))
-      (requested-amount (calculate-subsidy-amount treatment-cost (get max-coverage-percentage subsidy) (get income-level patient)))
+      (calculated-age (calculate-biological-age telomere-length dna-methylation-age protein-markers metabolic-markers cognitive-score physical-fitness-score))
+      (confidence (calculate-assessment-confidence protein-markers metabolic-markers))
     )
-    (asserts! (is-eq tx-sender (get wallet patient)) ERR-NOT-AUTHORIZED)
-    (asserts! (get active subsidy) ERR-SUBSIDY-NOT-FOUND)
-    (asserts! eligibility-check ERR-ELIGIBILITY-FAILED)
-    (asserts! (> treatment-cost u0) ERR-INVALID-INPUT)
-    (asserts! (<= requested-amount (get funding-pool subsidy)) ERR-INSUFFICIENT-FUNDS)
+    (asserts! (is-authorized-assessor tx-sender) ERR-NOT-AUTHORIZED)
+    (asserts! (> telomere-length u0) ERR-INVALID-INPUT)
+    (asserts! (> dna-methylation-age u0) ERR-INVALID-INPUT)
+    (asserts! (<= cognitive-score u100) ERR-INVALID-INPUT)
+    (asserts! (<= physical-fitness-score u100) ERR-INVALID-INPUT)
 
-    (map-set subsidy-applications
-      { application-id: application-id }
+    (map-set biological-assessments
+      { assessment-id: assessment-id }
       {
         patient-id: patient-id,
-        subsidy-id: subsidy-id,
-        treatment-type: treatment-type,
-        treatment-cost: treatment-cost,
-        requested-amount: requested-amount,
-        application-block: block-height,
-        status: "pending",
-        approved-amount: u0,
-        reviewer: none
+        assessor: tx-sender,
+        assessment-block: block-height,
+        telomere-length: telomere-length,
+        dna-methylation-age: dna-methylation-age,
+        protein-markers: protein-markers,
+        metabolic-markers: metabolic-markers,
+        cognitive-score: cognitive-score,
+        physical-fitness-score: physical-fitness-score,
+        calculated-bio-age: calculated-age,
+        confidence-level: confidence
       }
     )
 
-    (var-set next-application-id (+ application-id u1))
-    (ok application-id)
-  )
-)
-
-(define-private (check-eligibility (patient (tuple (wallet principal) (income-level uint) (geographic-region (string-ascii 50)) (age uint) (medical-need-score uint) (subsidies-received uint) (total-treatments uint) (active bool))) (subsidy (tuple (program-name (string-ascii 100)) (funding-pool uint) (max-coverage-percentage uint) (income-threshold uint) (geographic-restrictions (list 10 (string-ascii 50))) (treatment-types (list 5 (string-ascii 50))) (active bool) (total-beneficiaries uint))) (treatment-type (string-ascii 50)))
-  (let
-    (
-      (income-eligible (<= (get income-level patient) (get income-threshold subsidy)))
-      (geographic-eligible (is-some (index-of (get geographic-restrictions subsidy) (get geographic-region patient))))
-      (treatment-eligible (is-some (index-of (get treatment-types subsidy) treatment-type)))
-    )
-    (and income-eligible (or geographic-eligible (is-eq (len (get geographic-restrictions subsidy)) u0)) treatment-eligible)
-  )
-)
-
-(define-private (calculate-subsidy-amount (treatment-cost uint) (max-coverage uint) (income-level uint))
-  (let
-    (
-      (income-factor (if (<= income-level u30000) u100
-                      (if (<= income-level u50000) u80
-                        (if (<= income-level u75000) u60
-                          u40))))
-      (coverage-percentage (/ (* max-coverage income-factor) u100))
-    )
-    (/ (* treatment-cost coverage-percentage) u100)
-  )
-)
-
-(define-public (review-application (application-id uint) (approved bool) (approved-amount uint))
-  (let
-    (
-      (application (unwrap! (map-get? subsidy-applications { application-id: application-id }) ERR-INVALID-INPUT))
-      (subsidy (unwrap! (map-get? subsidy-programs { subsidy-id: (get subsidy-id application) }) ERR-SUBSIDY-NOT-FOUND))
-    )
-    (asserts! (is-authorized-reviewer tx-sender) ERR-NOT-AUTHORIZED)
-    (asserts! (is-eq (get status application) "pending") ERR-INVALID-INPUT)
-    (asserts! (<= approved-amount (get requested-amount application)) ERR-INVALID-INPUT)
-
-    (map-set subsidy-applications
-      { application-id: application-id }
-      (merge application {
-        status: (if approved "approved" "rejected"),
-        approved-amount: approved-amount,
-        reviewer: (some tx-sender)
-      })
-    )
-
-    ;; Update subsidy program funding if approved
-    (if approved
-      (map-set subsidy-programs
-        { subsidy-id: (get subsidy-id application) }
-        (merge subsidy {
-          funding-pool: (- (get funding-pool subsidy) approved-amount),
-          total-beneficiaries: (+ (get total-beneficiaries subsidy) u1)
+    ;; Update patient's current biological age if confidence is sufficient
+    (if (>= confidence u75)
+      (map-set patients
+        { patient-id: patient-id }
+        (merge patient {
+          current-biological-age: calculated-age,
+          assessment-count: (+ (get assessment-count patient) u1),
+          last-assessment-block: block-height
         })
       )
       true
     )
 
-    (ok approved)
+    (var-set next-assessment-id (+ assessment-id u1))
+    (ok assessment-id)
   )
 )
 
-;; Funding Management Functions
-(define-public (contribute-funding (source-name (string-ascii 50)) (amount uint) (allocation-preferences (list 5 (string-ascii 50))))
-  (begin
-    (asserts! (> amount u0) ERR-INVALID-INPUT)
-
-    (map-set funding-sources
-      { source-name: source-name }
-      {
-        contributor: tx-sender,
-        total-contributed: (+ (default-to u0 (get total-contributed (map-get? funding-sources { source-name: source-name }))) amount),
-        allocation-preferences: allocation-preferences,
-        active: true
-      }
+(define-private (calculate-biological-age
+  (telomere-length uint)
+  (dna-methylation-age uint)
+  (protein-markers (list 10 uint))
+  (metabolic-markers (list 5 uint))
+  (cognitive-score uint)
+  (physical-fitness-score uint))
+  (let
+    (
+      (telomere-weight u25)
+      (methylation-weight u30)
+      (protein-weight u20)
+      (metabolic-weight u15)
+      (cognitive-weight u5)
+      (fitness-weight u5)
+      (telomere-age (/ (* telomere-length u100) u8000)) ;; Simplified calculation
+      (protein-avg (/ (fold + protein-markers u0) u10))
+      (metabolic-avg (/ (fold + metabolic-markers u0) u5))
+      (weighted-sum (+
+        (/ (* telomere-age telomere-weight) u100)
+        (/ (* dna-methylation-age methylation-weight) u100)
+        (/ (* protein-avg protein-weight) u100)
+        (/ (* metabolic-avg metabolic-weight) u100)
+        (/ (* (- u100 cognitive-score) cognitive-weight) u100)
+        (/ (* (- u100 physical-fitness-score) fitness-weight) u100)
+      ))
     )
-
-    (var-set total-fund-balance (+ (var-get total-fund-balance) amount))
-    (ok true)
+    weighted-sum
   )
 )
 
-(define-public (set-treatment-cost (treatment-type (string-ascii 50)) (base-cost uint) (complexity-multiplier uint) (insurance-coverage uint))
-  (begin
-    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
-    (asserts! (> base-cost u0) ERR-INVALID-INPUT)
-    (asserts! (> complexity-multiplier u0) ERR-INVALID-INPUT)
-    (asserts! (<= insurance-coverage u100) ERR-INVALID-INPUT)
+(define-private (calculate-assessment-confidence (protein-markers (list 10 uint)) (metabolic-markers (list 5 uint)))
+  (let
+    (
+      (protein-count (len protein-markers))
+      (metabolic-count (len metabolic-markers))
+      (base-confidence u50)
+      (protein-bonus (* protein-count u3))
+      (metabolic-bonus (* metabolic-count u4))
+    )
+    (if (<= (+ base-confidence protein-bonus metabolic-bonus) u100)
+      (+ base-confidence protein-bonus metabolic-bonus)
+      u100
+    )
+  )
+)
 
-    (map-set treatment-costs
-      { treatment-type: treatment-type }
+;; Verification Functions
+(define-public (create-age-verification (patient-id uint) (verification-method (string-ascii 50)) (supporting-data (string-ascii 200)))
+  (let
+    (
+      (verification-id (var-get next-verification-id))
+      (patient (unwrap! (map-get? patients { patient-id: patient-id }) ERR-PATIENT-NOT-FOUND))
+      (previous-age (get baseline-biological-age patient))
+      (current-age (get current-biological-age patient))
+      (reversal-amount (if (< current-age previous-age) (- previous-age current-age) u0))
+    )
+    (asserts! (is-authorized-assessor tx-sender) ERR-NOT-AUTHORIZED)
+    (asserts! (> (get assessment-count patient) u1) ERR-INSUFFICIENT-DATA)
+    (asserts! (> reversal-amount u0) ERR-VERIFICATION-FAILED)
+
+    (map-set age-verifications
+      { verification-id: verification-id }
       {
-        base-cost: base-cost,
-        complexity-multiplier: complexity-multiplier,
-        regional-adjustments: (list),
-        insurance-coverage: insurance-coverage
+        patient-id: patient-id,
+        verifier: tx-sender,
+        verification-block: block-height,
+        previous-bio-age: previous-age,
+        current-bio-age: current-age,
+        reversal-amount: reversal-amount,
+        verification-method: verification-method,
+        supporting-data: supporting-data,
+        verified: true,
+        verification-score: (calculate-verification-score reversal-amount verification-method)
       }
     )
-    (ok true)
+
+    ;; Update patient's verified reversals count
+    (map-set patients
+      { patient-id: patient-id }
+      (merge patient {
+        verified-reversals: (+ (get verified-reversals patient) u1)
+      })
+    )
+
+    (var-set next-verification-id (+ verification-id u1))
+    (ok verification-id)
+  )
+)
+
+(define-private (calculate-verification-score (reversal-amount uint) (method (string-ascii 50)))
+  (let
+    (
+      (base-score (* reversal-amount u10))
+      (method-multiplier (if (is-eq method "comprehensive-panel") u2
+                          (if (is-eq method "telomere-methylation") u15
+                            u1)))
+    )
+    (if (<= (* base-score method-multiplier) u100)
+      (* base-score method-multiplier)
+      u100
+    )
   )
 )
 
 ;; Provider Management Functions
-(define-public (register-reviewer (reviewer principal) (specialization (string-ascii 50)))
+(define-public (register-assessor (assessor principal) (specialization (string-ascii 50)) (certification-level uint))
   (begin
     (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
-    (map-set authorized-reviewers
-      { reviewer: reviewer }
+    (asserts! (<= certification-level u5) ERR-INVALID-INPUT)
+
+    (map-set authorized-assessors
+      { assessor: assessor }
       {
         active: true,
         specialization: specialization,
-        approved-applications: u0,
-        total-reviews: u0
+        accuracy-score: u75,
+        total-assessments: u0,
+        certification-level: certification-level
       }
     )
     (ok true)
   )
 )
 
-;; Analytics Functions
-(define-public (calculate-access-equity-score (geographic-region (string-ascii 50)))
-  (let
-    (
-      ;; This would calculate equity metrics for a region
-      ;; Simplified implementation
-      (base-score u75)
+(define-public (set-biomarker-weight (biomarker-type (string-ascii 30)) (weight uint) (reliability-score uint))
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (asserts! (<= weight u100) ERR-INVALID-INPUT)
+    (asserts! (<= reliability-score u100) ERR-INVALID-INPUT)
+
+    (map-set biomarker-weights
+      { biomarker-type: biomarker-type }
+      {
+        weight: weight,
+        reliability-score: reliability-score,
+        age-correlation: u80
+      }
     )
-    (ok base-score)
+    (ok true)
   )
 )
 
-(define-public (get-funding-distribution)
-  (ok {
-    total-balance: (var-get total-fund-balance),
-    active-programs: (var-get next-subsidy-id),
-    total-applications: (var-get next-application-id)
-  })
+;; Analysis Functions
+(define-public (calculate-reversal-rate (patient-id uint))
+  (let
+    (
+      (patient (unwrap! (map-get? patients { patient-id: patient-id }) ERR-PATIENT-NOT-FOUND))
+      (baseline (get baseline-biological-age patient))
+      (current (get current-biological-age patient))
+      (chronological (get chronological-age patient))
+    )
+    (if (< current baseline)
+      (ok {
+        absolute-reversal: (- baseline current),
+        percentage-reversal: (/ (* (- baseline current) u100) baseline),
+        biological-vs-chronological: (if (< current chronological) (- chronological current) u0)
+      })
+      (ok {
+        absolute-reversal: u0,
+        percentage-reversal: u0,
+        biological-vs-chronological: u0
+      })
+    )
+  )
 )
 
 ;; Read-only Functions
@@ -342,41 +350,26 @@
   (map-get? patients { patient-id: patient-id })
 )
 
-(define-read-only (get-subsidy-program (subsidy-id uint))
-  (map-get? subsidy-programs { subsidy-id: subsidy-id })
+(define-read-only (get-assessment (assessment-id uint))
+  (map-get? biological-assessments { assessment-id: assessment-id })
 )
 
-(define-read-only (get-application (application-id uint))
-  (map-get? subsidy-applications { application-id: application-id })
+(define-read-only (get-verification (verification-id uint))
+  (map-get? age-verifications { verification-id: verification-id })
 )
 
-(define-read-only (get-funding-source (source-name (string-ascii 50)))
-  (map-get? funding-sources { source-name: source-name })
+(define-read-only (get-assessor-info (assessor principal))
+  (map-get? authorized-assessors { assessor: assessor })
 )
 
-(define-read-only (get-treatment-cost (treatment-type (string-ascii 50)))
-  (map-get? treatment-costs { treatment-type: treatment-type })
-)
-
-(define-read-only (get-reviewer-info (reviewer principal))
-  (map-get? authorized-reviewers { reviewer: reviewer })
+(define-read-only (get-biomarker-weight (biomarker-type (string-ascii 30)))
+  (map-get? biomarker-weights { biomarker-type: biomarker-type })
 )
 
 (define-read-only (get-contract-stats)
   {
     next-patient-id: (var-get next-patient-id),
-    next-subsidy-id: (var-get next-subsidy-id),
-    total-fund-balance: (var-get total-fund-balance),
-    next-application-id: (var-get next-application-id)
+    next-assessment-id: (var-get next-assessment-id),
+    next-verification-id: (var-get next-verification-id)
   }
-)
-
-(define-read-only (estimate-subsidy-eligibility (patient-id uint) (subsidy-id uint) (treatment-type (string-ascii 50)))
-  (let
-    (
-      (patient (unwrap! (map-get? patients { patient-id: patient-id }) ERR-PATIENT-NOT-FOUND))
-      (subsidy (unwrap! (map-get? subsidy-programs { subsidy-id: subsidy-id }) ERR-SUBSIDY-NOT-FOUND))
-    )
-    (ok (check-eligibility patient subsidy treatment-type))
-  )
 )

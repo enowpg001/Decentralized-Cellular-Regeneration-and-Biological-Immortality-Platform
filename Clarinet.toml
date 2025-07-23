@@ -9,6 +9,11 @@ requirements = []
 path = 'contracts/bio-age-verification.clar'
 clarity_version = 2
 epoch = 2.5
+
+[contracts.regenerative-access-equity]
+path = 'contracts/regenerative-access-equity.clar'
+clarity_version = 2
+epoch = 2.5
 [repl.analysis]
 passes = ['check_checker']
 
